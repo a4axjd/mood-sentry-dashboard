@@ -1,0 +1,22 @@
+[
+    {
+        "id": "1",
+        "text": "Breathe in. Breathe out.",
+        "category": "CALM"
+    },
+    {
+        "id": "2",
+        "text": "This too shall pass.",
+        "category": "SAD"
+    },
+    {
+        "id": "3",
+        "text": "Rest is productive.",
+        "category": "TIRED"
+    },
+    {
+        "id": "4",
+        "text": "You are your own best company.",
+        "category": "ALONE"
+    }
+]
