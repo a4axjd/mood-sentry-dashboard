@@ -19,12 +19,13 @@ let pool: Pool | null = null;
 
 function getPool() {
     if (!pool) {
-        if (!process.env.DATABASE_URL) {
-            console.warn("DATABASE_URL not found. SQL will fail.");
+        const connectionString = process.env.DATABASE_URL || process.env.POSTGRES_URL;
+        if (!connectionString) {
+            console.warn("DATABASE_URL or POSTGRES_URL not found. SQL will fail.");
             return null;
         }
         pool = new Pool({
-            connectionString: process.env.DATABASE_URL,
+            connectionString: connectionString,
             ssl: { rejectUnauthorized: false } // Required for Supabase/Neon usually
         });
     }

@@ -24,7 +24,7 @@ export async function POST(request: NextRequest) {
 
     } catch (error: any) {
         console.error("API Error:", error);
-        const isSqlConfigured = !!(process.env.DATABASE_URL);
+        const isSqlConfigured = !!(process.env.DATABASE_URL || process.env.POSTGRES_URL);
 
         // Return detailed error message to the UI
         return NextResponse.json({
