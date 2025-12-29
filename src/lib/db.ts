@@ -24,6 +24,7 @@ function getPool() {
             console.warn("DATABASE_URL or POSTGRES_URL not found. SQL will fail.");
             return null;
         }
+        console.log("Initializing Pool with SSL: rejectUnauthorized=false");
         pool = new Pool({
             connectionString: connectionString,
             ssl: { rejectUnauthorized: false } // Required for Supabase/Neon usually
