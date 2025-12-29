@@ -24,13 +24,13 @@ export async function POST(request: NextRequest) {
 
     } catch (error: any) {
         console.error("API Error:", error);
-        const isKvConfigured = !!((process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) || process.env.REDIS_URL);
+        const isSqlConfigured = !!(process.env.DATABASE_URL);
 
         // Return detailed error message to the UI
         return NextResponse.json({
-            error: `DB Error: ${error.message} (Redis/KV Configured: ${isKvConfigured})`,
+            error: `DB Error: ${error.message} (Supabase/DB Configured: ${isSqlConfigured})`,
             details: error.message,
-            kv_configured: isKvConfigured
+            sql_configured: isSqlConfigured
         }, { status: 500 });
     }
 }

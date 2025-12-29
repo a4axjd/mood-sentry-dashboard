@@ -1,10 +1,4 @@
-import fs from 'fs';
-import path from 'path';
-import { kv } from '@vercel/kv';
-import Redis from 'ioredis';
-
-const dataDirectory = path.join(process.cwd(), 'data');
-const quotesFilePath = path.join(dataDirectory, 'quotes.json');
+import { Pool } from 'pg';
 
 export type Category = 'CALM' | 'SAD' | 'TIRED' | 'ALONE';
 
@@ -14,90 +8,124 @@ export interface Quote {
     category: Category;
 }
 
-const INITIAL_QUOTES: Quote[] = [
-    { id: "1", text: "Breathe in. Breathe out.", category: "CALM" },
-    { id: "2", text: "This too shall pass.", category: "SAD" },
-    { id: "3", text: "Rest is productive.", category: "TIRED" },
-    { id: "4", text: "You are your own best company.", category: "ALONE" }
+const INITIAL_QUOTES: Omit<Quote, 'id'>[] = [
+    { text: "Breathe in. Breathe out.", category: "CALM" },
+    { text: "This too shall pass.", category: "SAD" },
+    { text: "Rest is productive.", category: "TIRED" },
+    { text: "You are your own best company.", category: "ALONE" }
 ];
 
-// Helper to check what mode we are in
-function getStorageMode() {
-    if (process.env.REDIS_URL) return 'REDIS';
-    // Fallback for debugging - Use the provided URL if env is missing
-    if (true) return 'REDIS_FALLBACK';
-    if (process.env.KV_REST_API_URL && process.env.KV_REST_API_TOKEN) return 'VERCEL_KV';
-    return 'LOCAL';
+let pool: Pool | null = null;
+
+function getPool() {
+    if (!pool) {
+        if (!process.env.DATABASE_URL) {
+            console.warn("DATABASE_URL not found. SQL will fail.");
+            return null;
+        }
+        pool = new Pool({
+            connectionString: process.env.DATABASE_URL,
+            ssl: { rejectUnauthorized: false } // Required for Supabase/Neon usually
+        });
+    }
+    return pool;
 }
 
-const FALLBACK_REDIS_URL = "redis://default:9x4w77bsxs0p2STlMRSEpRvYYfzvUSOX@redis-15756.crce179.ap-south-1-1.ec2.cloud.redislabs.com:15756";
+// Helper: Ensure table exists and seed if empty
+async function initDB() {
+    const db = getPool();
+    if (!db) return;
 
-// Internal: Get fresh quotes array
-async function fetchQuotes(): Promise<Quote[]> {
-    const mode = getStorageMode();
     try {
-        if (mode === 'REDIS' || mode === 'REDIS_FALLBACK') {
-            const url = mode === 'REDIS' ? process.env.REDIS_URL! : FALLBACK_REDIS_URL;
-            const redis = new Redis(url);
-            const data = await redis.get('quotes');
-            redis.quit(); // Close connection to prevent leaks in serverless (though Next.js reuses usually, explicit for now)
-            return data ? JSON.parse(data) : INITIAL_QUOTES;
+        // Create table if not exists
+        await db.query(`
+      CREATE TABLE IF NOT EXISTS quotes (
+        id SERIAL PRIMARY KEY,
+        text VARCHAR(255) NOT NULL,
+        category VARCHAR(50) NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+
+        // Check count
+        const res = await db.query('SELECT COUNT(*) FROM quotes');
+        const count = parseInt(res.rows[0].count);
+
+        if (count === 0) {
+            console.log("Seeding database...");
+            for (const q of INITIAL_QUOTES) {
+                await db.query(
+                    'INSERT INTO quotes (text, category) VALUES ($1, $2)',
+                    [q.text, q.category]
+                );
+            }
         }
-
-        if (mode === 'VERCEL_KV') {
-            const data = await kv.get<Quote[]>('quotes');
-            return data || INITIAL_QUOTES;
-        }
-
-        // Local
-        if (!fs.existsSync(quotesFilePath)) return INITIAL_QUOTES;
-        return JSON.parse(fs.readFileSync(quotesFilePath, 'utf8'));
-
-    } catch (error) {
-        console.error("DB Error:", error);
-        return INITIAL_QUOTES;
+    } catch (err) {
+        console.error("Failed to initialize DB:", err);
     }
-}
-
-// Internal: Write quotes array
-async function writeQuotes(quotes: Quote[]) {
-    const mode = getStorageMode();
-    if (mode === 'REDIS' || mode === 'REDIS_FALLBACK') {
-        const url = mode === 'REDIS' ? process.env.REDIS_URL! : FALLBACK_REDIS_URL;
-        const redis = new Redis(url);
-        await redis.set('quotes', JSON.stringify(quotes));
-        redis.quit();
-        return;
-    }
-
-    if (mode === 'VERCEL_KV') {
-        await kv.set('quotes', quotes);
-        return;
-    }
-
-    // Local
-    if (!fs.existsSync(dataDirectory)) fs.mkdirSync(dataDirectory);
-    fs.writeFileSync(quotesFilePath, JSON.stringify(quotes, null, 2));
 }
 
 // --- Public API ---
 
 export async function getQuotes(): Promise<Quote[]> {
-    return await fetchQuotes();
+    try {
+        await initDB();
+        const db = getPool();
+        if (!db) return [];
+
+        const res = await db.query('SELECT * FROM quotes ORDER BY id DESC');
+        return res.rows.map((r: any) => ({
+            id: r.id.toString(),
+            text: r.text,
+            category: r.category as Category
+        }));
+    } catch (error) {
+        console.error("SQL Error (getQuotes):", error);
+        return [];
+    }
 }
 
 export async function saveQuote(quote: Omit<Quote, 'id'>) {
-    const quotes = await fetchQuotes();
-    const newQuote = { ...quote, id: Date.now().toString() };
-    quotes.push(newQuote);
-    await writeQuotes(quotes);
-    return newQuote;
+    try {
+        await initDB();
+        const db = getPool();
+        if (!db) throw new Error("Database not configured");
+
+        const res = await db.query(
+            'INSERT INTO quotes (text, category) VALUES ($1, $2) RETURNING id, text, category',
+            [quote.text, quote.category]
+        );
+        const newRow = res.rows[0];
+        return {
+            id: newRow.id.toString(),
+            text: newRow.text,
+            category: newRow.category as Category
+        };
+    } catch (error) {
+        console.error("SQL Error (saveQuote):", error);
+        throw error;
+    }
 }
 
 export async function getRandomQuote(category: Category): Promise<string> {
-    const quotes = await fetchQuotes();
-    const filtered = quotes.filter((q) => q.category === category);
-    if (filtered.length === 0) return "No quote found.";
-    const randomIndex = Math.floor(Math.random() * filtered.length);
-    return filtered[randomIndex].text;
+    try {
+        await initDB();
+        const db = getPool();
+        if (!db) return "Database not configured.";
+
+        // Optimized random fetch in SQL
+        const res = await db.query(
+            'SELECT text FROM quotes WHERE category = $1 ORDER BY RANDOM() LIMIT 1',
+            [category]
+        );
+
+        if (res.rows.length > 0) {
+            return res.rows[0].text;
+        }
+
+        return "No quote found for this mood.";
+    } catch (error) {
+        console.error("SQL Error (getRandomQuote):", error);
+        return "Database connection error.";
+    }
 }
